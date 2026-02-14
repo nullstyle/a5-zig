@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qa:
+    name: zig-rust-qa
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ZIG_BUILD_SEED: 0x1badc0de
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup mise
+        uses: jdx/mise-action@v2
+        with:
+          install: true
+          cache: true
+
+      - name: Tool versions
+        run: |
+          mise --version
+          mise ls
+          mise x -- zig version
+          mise x -- rustc --version
+          mise x -- cargo --version
+
+      - name: Zig tests
+        run: mise x -- zig build test --seed ${ZIG_BUILD_SEED}
+
+      - name: QA e2e
+        run: mise x -- zig build qa --seed ${ZIG_BUILD_SEED}
