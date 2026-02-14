@@ -4,3 +4,4 @@ zig-build
 .DS_Store
 *.jsonl
 zig-out
+target

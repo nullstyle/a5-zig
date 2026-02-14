@@ -84,19 +84,22 @@ fn runRustExportCellIds(allocator: std.mem.Allocator, resolution: i32) !CommandO
         "cargo",
         "run",
         "--quiet",
-        "--example",
-        "export_cell_ids",
+        "--manifest-path",
+        "tests/qa_rust_oracle/Cargo.toml",
+        "--target-dir",
+        ".zig-cache/qa_rust_oracle_target",
         "--",
+        "cell-ids",
         resolution_text,
     };
-    return runCommand(allocator, &argv, "ref/a5-rs");
+    return runCommand(allocator, &argv, null);
 }
 
 fn runRustExportCellBoundaries(
     allocator: std.mem.Allocator,
     cell_ids: []const u64,
 ) !CommandOutput {
-    var argv = try std.ArrayList([]const u8).initCapacity(allocator, 6 + cell_ids.len);
+    var argv = try std.ArrayList([]const u8).initCapacity(allocator, 10 + cell_ids.len);
     defer argv.deinit(allocator);
 
     var encoded_ids = try std.ArrayList([]u8).initCapacity(allocator, cell_ids.len);
@@ -109,9 +112,12 @@ fn runRustExportCellBoundaries(
         "cargo",
         "run",
         "--quiet",
-        "--example",
-        "export_cell_boundaries",
+        "--manifest-path",
+        "tests/qa_rust_oracle/Cargo.toml",
+        "--target-dir",
+        ".zig-cache/qa_rust_oracle_target",
         "--",
+        "cell-boundaries",
     });
 
     for (cell_ids) |cell_id| {
@@ -120,7 +126,7 @@ fn runRustExportCellBoundaries(
         try argv.append(allocator, encoded);
     }
 
-    return runCommand(allocator, argv.items, "ref/a5-rs");
+    return runCommand(allocator, argv.items, null);
 }
 
 fn parseHexCells(allocator: std.mem.Allocator, stdout: []const u8) ![]u64 {
