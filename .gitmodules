@@ -1,0 +1,3 @@
+[submodule "ref/a5-rs"]
+	path = ref/a5-rs
+	url = git@github.com:felixpalmer/a5-rs.git

@@ -1,0 +1,4 @@
+[tools]
+just = "latest"
+rust = "1.93.0"
+zig = "0.15.2"
