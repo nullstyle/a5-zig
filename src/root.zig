@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const coordinate_systems = @import("coordinate_systems");
 pub const core = @import("core");
@@ -34,6 +35,10 @@ pub const module_map = .{
 };
 
 pub fn bufferedPrint() !void {
+    if (builtin.os.tag == .freestanding) {
+        return;
+    }
+
     var stdout_buffer: [1024]u8 = undefined;
     var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
     const stdout = &stdout_writer.interface;

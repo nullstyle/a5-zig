@@ -65,61 +65,100 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    const exe = b.addExecutable(.{
-        .name = "a5-zig",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "a5", .module = a5_module },
-            },
-        }),
-    });
+    const is_wasm_freestanding =
+        target.result.os.tag == .freestanding and
+        (target.result.cpu.arch == .wasm32 or target.result.cpu.arch == .wasm64);
 
-    b.installArtifact(exe);
+    if (is_wasm_freestanding) {
+        const a5_wasm_lib = b.addLibrary(.{
+            .linkage = .static,
+            .name = "a5-zig",
+            .root_module = a5_module,
+        });
+        b.installArtifact(a5_wasm_lib);
+    } else {
+        const exe = b.addExecutable(.{
+            .name = "a5-zig",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/main.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "a5", .module = a5_module },
+                },
+            }),
+        });
 
-    const run_step = b.step("run", "Run the app");
-    const run_cmd = b.addRunArtifact(exe);
-    run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
+        b.installArtifact(exe);
+
+        const run_step = b.step("run", "Run the app");
+        const run_cmd = b.addRunArtifact(exe);
+        run_cmd.step.dependOn(b.getInstallStep());
+        if (b.args) |args| {
+            run_cmd.addArgs(args);
+        }
+        run_step.dependOn(&run_cmd.step);
+
+        const export_cells_exe = b.addExecutable(.{
+            .name = "export-cells-jsonl",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("examples/export_cells_jsonl.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "a5", .module = a5_module },
+                },
+            }),
+        });
+
+        const export_cells_step = b.step(
+            "export-cells-jsonl",
+            "Print JSONL rows for all cells at a given resolution (with polygons)",
+        );
+        const export_cells_cmd = b.addRunArtifact(export_cells_exe);
+        if (b.args) |args| {
+            export_cells_cmd.addArgs(args);
+        }
+        export_cells_step.dependOn(&export_cells_cmd.step);
+
+        const export_cell_ids_exe = b.addExecutable(.{
+            .name = "export-cell-ids",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("examples/export_cell_ids.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "a5", .module = a5_module },
+                },
+            }),
+        });
+
+        const export_cell_ids_step = b.step(
+            "export-cell-ids",
+            "Print all A5 cell ids for a given resolution",
+        );
+        const export_cell_ids_cmd = b.addRunArtifact(export_cell_ids_exe);
+        if (b.args) |args| {
+            export_cell_ids_cmd.addArgs(args);
+        }
+        export_cell_ids_step.dependOn(&export_cell_ids_cmd.step);
     }
-    run_step.dependOn(&run_cmd.step);
-
-    const export_cells_exe = b.addExecutable(.{
-        .name = "export-cells-jsonl",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("examples/export_cells_jsonl.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "a5", .module = a5_module },
-            },
-        }),
-    });
-
-    const export_cells_step = b.step(
-        "export-cells-jsonl",
-        "Print JSONL rows for all cells at a given resolution (with polygons)",
-    );
-    const export_cells_cmd = b.addRunArtifact(export_cells_exe);
-    if (b.args) |args| {
-        export_cells_cmd.addArgs(args);
-    }
-    export_cells_step.dependOn(&export_cells_cmd.step);
-
-    const test_support = b.addModule("a5_test_support", .{
-        .root_source_file = b.path("tests/test_support.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
 
     const test_step = b.step("test", "Run shared infra tests");
     const qa_step = b.step("qa", "Run Track 7 differential checks and guardrails");
     qa_step.dependOn(test_step);
     const release_gates_step = b.step("release-gates", "Run release gates for completed migration tracks");
     release_gates_step.dependOn(qa_step);
+
+    if (is_wasm_freestanding) {
+        return;
+    }
+
+    const test_support = b.addModule("a5_test_support", .{
+        .root_source_file = b.path("tests/test_support.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
     addTrackTest(
         b,
         target,
@@ -389,6 +428,16 @@ pub fn build(b: *std.Build) void {
         &[_]std.Build.Module.Import{
             .{ .name = "a5", .module = a5_module },
             .{ .name = "a5_test_support", .module = test_support },
+        },
+        qa_step,
+    );
+    addTrackTest(
+        b,
+        target,
+        optimize,
+        "tests/qa_e2e_rust_zig_cell_ids.zig",
+        &[_]std.Build.Module.Import{
+            .{ .name = "a5", .module = a5_module },
         },
         qa_step,
     );

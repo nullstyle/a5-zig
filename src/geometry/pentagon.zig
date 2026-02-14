@@ -102,7 +102,7 @@ pub const PentagonShape = struct {
         return result;
     }
 
-    pub fn get_vertices_vec(self: PentagonShape) []const Face {
+    pub fn get_vertices_vec(self: *const PentagonShape) []const Face {
         return self.vertices[0..self.len];
     }
 

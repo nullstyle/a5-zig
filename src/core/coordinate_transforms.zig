@@ -155,8 +155,9 @@ pub fn normalize_longitudes(allocator: std.mem.Allocator, contour: []const LonLa
     const center_spherical = to_spherical(normalized_center);
     const center_lonlat = to_lon_lat(center_spherical);
     var center_lon = center_lonlat.longitude();
+    const center_lat = center_lonlat.latitude();
 
-    if (!(-89.99 <= center_lon and center_lon <= 89.99)) {
+    if (!(-89.99 <= center_lat and center_lat <= 89.99)) {
         center_lon = contour[0].longitude();
     }
 

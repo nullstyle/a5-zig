@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const coordinate_systems = @import("coordinate_systems");
 const core = @import("core");
 const constants = core.constants;
@@ -43,7 +44,9 @@ pub const CRS = struct {
     pub fn get_vertex(self: *CRS, point: Cartesian) Error!Cartesian {
         self.invocations += 1;
         if (self.invocations == 10000) {
-            std.debug.print("Warning: Too many CRS invocations, results should be cached\n", .{});
+            if (builtin.os.tag != .freestanding) {
+                std.debug.print("Warning: Too many CRS invocations, results should be cached\n", .{});
+            }
         }
 
         for (self.vertices[0..self.len]) |vertex| {
