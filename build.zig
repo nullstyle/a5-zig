@@ -87,6 +87,28 @@ pub fn build(b: *std.Build) void {
     }
     run_step.dependOn(&run_cmd.step);
 
+    const export_cells_exe = b.addExecutable(.{
+        .name = "export-cells-jsonl",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/export_cells_jsonl.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "a5", .module = a5_module },
+            },
+        }),
+    });
+
+    const export_cells_step = b.step(
+        "export-cells-jsonl",
+        "Print JSONL rows for all cells at a given resolution (with polygons)",
+    );
+    const export_cells_cmd = b.addRunArtifact(export_cells_exe);
+    if (b.args) |args| {
+        export_cells_cmd.addArgs(args);
+    }
+    export_cells_step.dependOn(&export_cells_cmd.step);
+
     const test_support = b.addModule("a5_test_support", .{
         .root_source_file = b.path("tests/test_support.zig"),
         .target = target,

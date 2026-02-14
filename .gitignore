@@ -2,3 +2,4 @@ refdata
 .zig-cache
 zig-build
 .DS_Store
+*.jsonl
