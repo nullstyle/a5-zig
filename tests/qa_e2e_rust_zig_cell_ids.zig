@@ -9,6 +9,13 @@ const MAX_RESOLUTION_TO_COMPARE: i32 = 9;
 const MAX_COMMAND_OUTPUT_BYTES: usize = 512 * 1024 * 1024;
 const MAX_POLYGON_SAMPLES_PER_RESOLUTION: usize = 32;
 const POLYGON_TOLERANCE_RADIANS: f64 = 5e-5;
+const DEEP_RANDOM_PARITY_RESOLUTION: i32 = 25;
+const DEEP_RANDOM_PARITY_BATCH_SIZE: usize = 32;
+const DEEP_RANDOM_PARITY_DURATION_NS: i128 = 10 * std.time.ns_per_s;
+const DEEP_RANDOM_PARITY_SEED: u64 = 0x00d3_3e5e_0a4c_1e25;
+const DEEP_RANDOM_POINT_MIN_T: f64 = 0.000001;
+const DEEP_RANDOM_POINT_MAX_T: f64 = 0.000005;
+const DEEP_RANDOM_POINT_CONTAINMENT_EPSILON: f64 = 1e-8;
 
 const CommandOutput = struct {
     stdout: []const u8,
@@ -39,6 +46,33 @@ const PointMismatch = struct {
     nearest_index: usize,
     distance_radians: f64,
 };
+
+fn randomCellAtResolution(
+    random: std.Random,
+    resolution: i32,
+) !u64 {
+    if (resolution < 0 or resolution > serialization.MAX_RESOLUTION) {
+        return error.InvalidResolution;
+    }
+
+    const origin_id: u8 = @intCast(random.uintLessThan(usize, 12));
+    const segment: usize = if (resolution > 0) random.uintLessThan(usize, 5) else 0;
+    var s: u64 = 0;
+
+    if (resolution >= serialization.FIRST_HILBERT_RESOLUTION) {
+        const hilbert_levels = resolution - serialization.FIRST_HILBERT_RESOLUTION + 1;
+        const hilbert_bits: u6 = @intCast(2 * hilbert_levels);
+        const max_s: u64 = @as(u64, 1) << hilbert_bits;
+        s = random.uintLessThan(u64, max_s);
+    }
+
+    return serialization.serialize(.{
+        .origin_id = origin_id,
+        .segment = segment,
+        .s = s,
+        .resolution = resolution,
+    });
+}
 
 fn runCommand(
     allocator: std.mem.Allocator,
@@ -123,6 +157,49 @@ fn runRustExportCellBoundaries(
     for (cell_ids) |cell_id| {
         const encoded = try std.fmt.allocPrint(allocator, "{x}", .{cell_id});
         try encoded_ids.append(allocator, encoded);
+        try argv.append(allocator, encoded);
+    }
+
+    return runCommand(allocator, argv.items, null);
+}
+
+fn runRustLonlatToCell(
+    allocator: std.mem.Allocator,
+    resolution: i32,
+    points: []const LonLat,
+) !CommandOutput {
+    var argv = try std.ArrayList([]const u8).initCapacity(allocator, 11 + points.len);
+    defer argv.deinit(allocator);
+
+    var encoded_points = try std.ArrayList([]u8).initCapacity(allocator, points.len);
+    defer {
+        for (encoded_points.items) |encoded| allocator.free(encoded);
+        encoded_points.deinit(allocator);
+    }
+
+    var resolution_buffer: [16]u8 = undefined;
+    const resolution_text = try std.fmt.bufPrint(&resolution_buffer, "{d}", .{resolution});
+
+    try argv.appendSlice(allocator, &.{
+        "cargo",
+        "run",
+        "--quiet",
+        "--manifest-path",
+        "tests/qa_rust_oracle/Cargo.toml",
+        "--target-dir",
+        ".zig-cache/qa_rust_oracle_target",
+        "--",
+        "lonlat-to-cell",
+        resolution_text,
+    });
+
+    for (points) |point| {
+        const encoded = try std.fmt.allocPrint(
+            allocator,
+            "{d:.17},{d:.17}",
+            .{ point.longitude(), point.latitude() },
+        );
+        try encoded_points.append(allocator, encoded);
         try argv.append(allocator, encoded);
     }
 
@@ -242,6 +319,69 @@ fn lonLatToUnitVector(lon_degrees: f64, lat_degrees: f64) UnitVec3 {
         .y = cos_lat * std.math.sin(lon),
         .z = std.math.sin(lat),
     };
+}
+
+fn normalizeUnitVector(vec: UnitVec3) UnitVec3 {
+    const len = std.math.sqrt(vec.x * vec.x + vec.y * vec.y + vec.z * vec.z);
+    if (len == 0.0) {
+        return .{ .x = 1.0, .y = 0.0, .z = 0.0 };
+    }
+    return .{
+        .x = vec.x / len,
+        .y = vec.y / len,
+        .z = vec.z / len,
+    };
+}
+
+fn unitVectorToLonLat(vec: UnitVec3) LonLat {
+    const normalized = normalizeUnitVector(vec);
+    const lon_radians = std.math.atan2(normalized.y, normalized.x);
+    const lat_radians = std.math.atan2(
+        normalized.z,
+        std.math.sqrt(normalized.x * normalized.x + normalized.y * normalized.y),
+    );
+    const radians_to_degrees = 180.0 / std.math.pi;
+    return LonLat.new(
+        lon_radians * radians_to_degrees,
+        lat_radians * radians_to_degrees,
+    );
+}
+
+fn pointTowardBoundary(center: LonLat, boundary_point: LonLat, t: f64) LonLat {
+    const center_vec = lonLatToUnitVector(center.longitude(), center.latitude());
+    const boundary_vec = lonLatToUnitVector(boundary_point.longitude(), boundary_point.latitude());
+    const blended = UnitVec3{
+        .x = center_vec.x * (1.0 - t) + boundary_vec.x * t,
+        .y = center_vec.y * (1.0 - t) + boundary_vec.y * t,
+        .z = center_vec.z * (1.0 - t) + boundary_vec.z * t,
+    };
+    return unitVectorToLonLat(blended);
+}
+
+fn randomInteriorPointForCell(
+    random: std.Random,
+    cell_id: u64,
+    boundary: []const LonLat,
+) !LonLat {
+    const center = try a5.cell_to_lonlat(cell_id);
+    const boundary_len = effectiveZigBoundaryLen(boundary);
+    if (boundary_len == 0) return center;
+
+    const cell_data = try serialization.deserialize(cell_id);
+    const boundary_index = random.uintLessThan(usize, boundary_len);
+    const target = boundary[boundary_index];
+    var t = DEEP_RANDOM_POINT_MIN_T +
+        (DEEP_RANDOM_POINT_MAX_T - DEEP_RANDOM_POINT_MIN_T) * random.float(f64);
+
+    var attempt: usize = 0;
+    while (attempt < 10) : (attempt += 1) {
+        const candidate = pointTowardBoundary(center, target, t);
+        const distance = try a5.core.cell.a5cell_contains_point(cell_data, candidate);
+        if (distance > DEEP_RANDOM_POINT_CONTAINMENT_EPSILON) return candidate;
+        t *= 0.5;
+    }
+
+    return center;
 }
 
 fn angularDistanceRadians(a: UnitVec3, b: UnitVec3) f64 {
@@ -588,4 +728,88 @@ test "qa e2e compare a5-rs and a5-zig cell outputs up to resolution 9" {
             try expectSameBoundary(resolution, rust_boundary.id, zig_boundary, rust_boundary.points);
         }
     }
+}
+
+test "qa e2e deep random cell boundary parity against rust oracle (~10s)" {
+    var prng = std.Random.DefaultPrng.init(DEEP_RANDOM_PARITY_SEED);
+    const random = prng.random();
+
+    const start_ns = std.time.nanoTimestamp();
+    const deadline_ns = start_ns + DEEP_RANDOM_PARITY_DURATION_NS;
+
+    var checked_cells: usize = 0;
+    var batch_count: usize = 0;
+
+    while (std.time.nanoTimestamp() < deadline_ns) : (batch_count += 1) {
+        var batch = try std.ArrayList(u64).initCapacity(std.testing.allocator, DEEP_RANDOM_PARITY_BATCH_SIZE);
+        defer batch.deinit(std.testing.allocator);
+
+        var i: usize = 0;
+        while (i < DEEP_RANDOM_PARITY_BATCH_SIZE) : (i += 1) {
+            const cell_id = try randomCellAtResolution(random, DEEP_RANDOM_PARITY_RESOLUTION);
+            try batch.append(std.testing.allocator, cell_id);
+        }
+
+        const rust_output = try runRustExportCellBoundaries(std.testing.allocator, batch.items);
+        defer std.testing.allocator.free(rust_output.stdout);
+        defer std.testing.allocator.free(rust_output.stderr);
+
+        const rust_boundaries = try parseRustBoundaries(std.testing.allocator, rust_output.stdout);
+        defer freeRustBoundaries(std.testing.allocator, rust_boundaries);
+
+        var sampled_points = try std.ArrayList(LonLat).initCapacity(std.testing.allocator, rust_boundaries.len);
+        defer sampled_points.deinit(std.testing.allocator);
+
+        try std.testing.expectEqual(batch.items.len, rust_boundaries.len);
+        for (rust_boundaries, 0..) |rust_boundary, idx| {
+            try std.testing.expectEqual(batch.items[idx], rust_boundary.id);
+            const zig_boundary = try a5.cell_to_boundary(std.testing.allocator, rust_boundary.id, .{
+                .closed_ring = true,
+                .segments = 1,
+            });
+            defer std.testing.allocator.free(zig_boundary);
+            try expectSameBoundary(DEEP_RANDOM_PARITY_RESOLUTION, rust_boundary.id, zig_boundary, rust_boundary.points);
+            const sampled_point = try randomInteriorPointForCell(random, rust_boundary.id, zig_boundary);
+            try sampled_points.append(std.testing.allocator, sampled_point);
+        }
+
+        const rust_lonlat_output = try runRustLonlatToCell(
+            std.testing.allocator,
+            DEEP_RANDOM_PARITY_RESOLUTION,
+            sampled_points.items,
+        );
+        defer std.testing.allocator.free(rust_lonlat_output.stdout);
+        defer std.testing.allocator.free(rust_lonlat_output.stderr);
+
+        const rust_lonlat_cells = try parseHexCells(std.testing.allocator, rust_lonlat_output.stdout);
+        defer std.testing.allocator.free(rust_lonlat_cells);
+
+        try std.testing.expectEqual(sampled_points.items.len, rust_lonlat_cells.len);
+        for (sampled_points.items, 0..) |point, idx| {
+            const zig_cell = try a5.lonlat_to_cell(point, DEEP_RANDOM_PARITY_RESOLUTION);
+            const rust_cell = rust_lonlat_cells[idx];
+            const source_cell = batch.items[idx];
+
+            if (zig_cell != rust_cell) {
+                std.debug.print(
+                    "deep random lonlat parity mismatch: idx={d} lon={d:.12} lat={d:.12} source={x:0>16} zig={x:0>16} rust={x:0>16}\n",
+                    .{
+                        idx,
+                        point.longitude(),
+                        point.latitude(),
+                        source_cell,
+                        zig_cell,
+                        rust_cell,
+                    },
+                );
+            }
+
+            try std.testing.expectEqual(source_cell, rust_cell);
+            try std.testing.expectEqual(rust_cell, zig_cell);
+        }
+
+        checked_cells += batch.items.len;
+    }
+
+    try std.testing.expect(checked_cells > 0);
 }

@@ -111,3 +111,16 @@ test "cell centers are contained in their own cells for fixture ids sample" {
         try std.testing.expect(containment > -1e-8);
     }
 }
+
+test "cell alaska regression matches website id" {
+    const point = LonLat.new(-149.7239, 61.3039);
+    const resolution: i32 = 5;
+
+    const computed_cell = try cell.lonlat_to_cell(point, resolution);
+    const website_cell = try hex.hex_to_u64("00d2000000000000");
+    try std.testing.expectEqual(website_cell, computed_cell);
+
+    const computed_cell_data = try serialization.deserialize(computed_cell);
+    const computed_distance = try cell.a5cell_contains_point(computed_cell_data, point);
+    try std.testing.expect(computed_distance > 0.0);
+}

@@ -1,6 +1,7 @@
 const std = @import("std");
 const coordinate_systems = @import("coordinate_systems");
 const authalic = @import("authalic.zig");
+const pentagon = @import("pentagon.zig");
 
 const Degrees = coordinate_systems.Degrees;
 const Radians = coordinate_systems.Radians;
@@ -119,11 +120,21 @@ pub fn to_lon_lat(spherical: Spherical) LonLat {
 }
 
 pub fn face_to_ij(face: Face) IJ {
-    return IJ.new(face.x(), face.y());
+    const basis_inverse_mat = pentagon.basis_inverse();
+    const x = face.x();
+    const y = face.y();
+    const u = basis_inverse_mat.m00 * x + basis_inverse_mat.m01 * y;
+    const v = basis_inverse_mat.m10 * x + basis_inverse_mat.m11 * y;
+    return IJ.new(u, v);
 }
 
 pub fn ij_to_face(ij: IJ) Face {
-    return Face.new(ij.x(), ij.y());
+    const basis_mat = pentagon.basis();
+    const u = ij.x();
+    const v = ij.y();
+    const x = basis_mat.m00 * u + basis_mat.m01 * v;
+    const y = basis_mat.m10 * u + basis_mat.m11 * v;
+    return Face.new(x, y);
 }
 
 pub fn face_to_kj(face: Face) KJ {

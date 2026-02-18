@@ -12,6 +12,7 @@ const dodecahedron = @import("cell_dodecahedron.zig");
 
 const Face = coordinate_systems.Face;
 const LonLat = coordinate_systems.LonLat;
+const Spherical = coordinate_systems.Spherical;
 const A5Cell = core_utils.A5Cell;
 const PentagonShape = geometry.pentagon.PentagonShape;
 const DodecahedronProjection = dodecahedron.DodecahedronProjection;
@@ -36,6 +37,10 @@ pub fn lonlat_to_cell(lonlat: LonLat, resolution: i32) Error!u64 {
         return serialization.serialize(estimate);
     }
 
+    return lonlat_to_cell_sampled(lonlat, resolution);
+}
+
+fn lonlat_to_cell_sampled(lonlat: LonLat, resolution: i32) Error!u64 {
     const sample_count: usize = 25;
     const total_samples = sample_count + 1;
     const hilbert_resolution = 1 + resolution - serialization.FIRST_HILBERT_RESOLUTION;
@@ -53,7 +58,7 @@ pub fn lonlat_to_cell(lonlat: LonLat, resolution: i32) Error!u64 {
 
     var unique_keys: [total_samples]u64 = undefined;
     var unique_len: usize = 0;
-    var best_cell: ?A5Cell = null;
+    var best_cell: ?u64 = null;
     var best_distance: f64 = -std.math.inf(f64);
 
     for (samples) |sample| {
@@ -78,12 +83,12 @@ pub fn lonlat_to_cell(lonlat: LonLat, resolution: i32) Error!u64 {
         }
         if (distance > best_distance) {
             best_distance = distance;
-            best_cell = estimate;
+            best_cell = key;
         }
     }
 
     if (best_cell) |cell| {
-        return serialization.serialize(cell);
+        return cell;
     }
     return Error.NoCandidateCell;
 }
@@ -91,6 +96,15 @@ pub fn lonlat_to_cell(lonlat: LonLat, resolution: i32) Error!u64 {
 fn lonlat_to_estimate(lonlat: LonLat, resolution: i32) Error!A5Cell {
     const spherical = ct.from_lon_lat(lonlat);
     const current_origin = core_origin.find_nearest_origin(spherical);
+
+    return lonlat_to_estimate_for_origin(spherical, current_origin, resolution);
+}
+
+fn lonlat_to_estimate_for_origin(
+    spherical: Spherical,
+    current_origin: core_utils.Origin,
+    resolution: i32,
+) Error!A5Cell {
 
     const projection = try DodecahedronProjection.get_thread_local();
     var dodec_point = try projection.forward(spherical, current_origin.id);

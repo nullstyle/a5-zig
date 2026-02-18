@@ -190,16 +190,12 @@ pub fn segment_to_quintant(segment: usize, origin: Origin) SegmentToQuintant {
 
 pub fn find_nearest_origin(point: Spherical) Origin {
     const origins = get_origins();
-    const tie_epsilon = 1e-15;
     var min_distance = std.math.inf(f64);
     var nearest = origins[0];
 
     for (origins) |origin| {
         const distance = haversine(point, origin.axis);
-        const diff = distance - min_distance;
-        if (diff < -tie_epsilon or
-            (@abs(diff) <= tie_epsilon and origin.id < nearest.id))
-        {
+        if (distance < min_distance) {
             min_distance = distance;
             nearest = origin;
         }
